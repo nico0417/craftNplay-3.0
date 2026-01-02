@@ -28,8 +28,28 @@ class ServerStatus(commands.Cog):
             return {}
 
     @commands.command(name='estado', aliases=['status'])
-    async def status_command(self, ctx, server_name: str):
-        """Consulta el estado de un servidor de Minecraft específico."""
+    async def status_command(self, ctx, server_name: str = None):
+        """Consulta el estado de un servidor de Minecraft específico.
+
+        `server_name` es opcional: si no se indica se usa el `default_server` o
+        el único servidor registrado.
+        """
+        # Resolver nombre si es opcional
+        if not server_name:
+            # Intentar usar config_manager.default_server
+            if self.config and getattr(self.config, 'default_server', None):
+                server_name = getattr(self.config, 'default_server')
+            else:
+                servers_tmp = self.load_server_data()
+                if not servers_tmp:
+                    await ctx.send('❌ No hay servidores registrados en `servers.json`.')
+                    return
+                if len(servers_tmp) == 1:
+                    server_name = next(iter(servers_tmp))
+                else:
+                    await ctx.send('❌ Debes especificar el nombre del servidor. Ejemplo: `!estado mi_servidor`')
+                    return
+
         await ctx.send(f"🔍 Consultando el estado del servidor `{server_name}`...")
 
         servers_data = self.load_server_data()

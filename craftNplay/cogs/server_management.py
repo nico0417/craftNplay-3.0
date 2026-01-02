@@ -33,6 +33,33 @@ class ServerManagement(commands.Cog):
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
+    async def _resolve_server_name(self, ctx, server_name: str):
+        """Resuelve el nombre del servidor si es opcional.
+
+        Si se pasa `server_name`, lo devuelve. Si no, y hay un `default_server`
+        en el config manager, lo retorna. Si solo hay un servidor registrado,
+        lo retorna. En otro caso pide al usuario que especifique el nombre.
+        """
+        if server_name:
+            return server_name
+
+        # Intentar usar config_manager.default_server
+        if self.config and getattr(self.config, 'default_server', None):
+            default = getattr(self.config, 'default_server')
+            if default in self.load_server_data():
+                return default
+
+        servers = self.load_server_data()
+        if not servers:
+            await ctx.send('❌ No hay servidores registrados.')
+            return None
+
+        if len(servers) == 1:
+            return next(iter(servers))
+
+        await ctx.send('❌ Debes especificar el nombre del servidor.')
+        return None
+
     # --- LÓGICA INTERNA (NO SON COMANDOS) ---
 
     async def _internal_start_server(self, ctx, server_name: str):
@@ -156,25 +183,50 @@ class ServerManagement(commands.Cog):
     @commands.command(name='iniciar', aliases=['start'])
     @commands.has_role(ADMIN_ROLE)
     async def iniciar_command(self, ctx, server_name: str):
-        """Inicia un servidor de Minecraft y Playit.gg."""
-        await self._internal_start_server(ctx, server_name)
+        """Inicia un servidor de Minecraft y Playit.gg.
+
+        `server_name` es obligatorio para `!iniciar`.
+        Al iniciarse correctamente, se guarda como `default_server`.
+        """
+        started = await self._internal_start_server(ctx, server_name)
+        if started and self.config and getattr(self.config, 'set_default_server', None):
+            try:
+                self.config.set_default_server(server_name)
+                await ctx.send(f'✅ `{server_name}` establecido como servidor por defecto.')
+            except Exception:
+                # No bloquear si falla el guardado
+                pass
 
     @commands.command(name='detener', aliases=['stop'])
     @commands.has_role(ADMIN_ROLE)
-    async def detener_command(self, ctx, server_name: str):
-        """Detiene un servidor de Minecraft y, si es el último, también Playit.gg."""
-        await self._internal_stop_server(ctx, server_name, stop_playit=True)
+    async def detener_command(self, ctx, server_name: str = None):
+        """Detiene un servidor de Minecraft y, si es el último, también Playit.gg.
+
+        `server_name` es opcional: si no se indica se usa el `default_server` o
+        el único servidor registrado.
+        """
+        resolved = await self._resolve_server_name(ctx, server_name)
+        if not resolved:
+            return
+        await self._internal_stop_server(ctx, resolved, stop_playit=True)
 
     @commands.command(name='reiniciar', aliases=['restart'])
     @commands.has_role(ADMIN_ROLE)
-    async def reiniciar_command(self, ctx, server_name: str):
-        """Reinicia un servidor de Minecraft, pero mantiene Playit.gg activo."""
-        await ctx.send(f'🔄 Reiniciando el servidor `{server_name}`...')
-        
+    async def reiniciar_command(self, ctx, server_name: str = None):
+        """Reinicia un servidor de Minecraft, pero mantiene Playit.gg activo.
+
+        `server_name` es opcional: si no se indica se usa el `default_server` o
+        el único servidor registrado.
+        """
+        resolved = await self._resolve_server_name(ctx, server_name)
+        if not resolved:
+            return
+
+        await ctx.send(f'🔄 Reiniciando el servidor `{resolved}`...')
         # Llama a la lógica interna, PERO no detiene Playit
-        if await self._internal_stop_server(ctx, server_name, stop_playit=False):
+        if await self._internal_stop_server(ctx, resolved, stop_playit=False):
             await asyncio.sleep(5)  # Esperar un momento
-            await self._internal_start_server(ctx, server_name)
+            await self._internal_start_server(ctx, resolved)
     
     # Manejador de errores para este Cog
     async def cog_command_error(self, ctx, error):
