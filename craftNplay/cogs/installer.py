@@ -128,21 +128,40 @@ class Installer(commands.Cog):
 
             elif server_type.lower() == 'fabric':
                 # Intentar descargar el instalador de Fabric y ejecutarlo
-                await ctx.send('🔎 Descargando instalador de Fabric (si está disponible)...')
+                await ctx.send('🔎 Intentando instalar Fabric para la versión solicitada...')
                 try:
-                    loaders_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}'
+                    # Obtener listado de loaders y filtrar por gameVersion
+                    loaders_url = 'https://meta.fabricmc.net/v2/versions/loader'
                     with urllib.request.urlopen(loaders_url, timeout=10) as r:
                         loaders = json.load(r)
-                    if not loaders:
-                        raise RuntimeError('No se encontró un loader de Fabric para esa versión.')
-                    loader_version = loaders[0].get('version')
+
+                    match = None
+                    for l in loaders:
+                        if l.get('gameVersion') == version:
+                            match = l
+                            break
+
+                    if not match:
+                        raise RuntimeError('No se encontró un loader de Fabric compatible con esa versión de Minecraft')
+
+                    # El campo puede llamarse 'loader' o 'version' según el formato
+                    loader_version = match.get('loader') or match.get('version')
+                    if not loader_version:
+                        raise RuntimeError('No se pudo determinar la versión del loader de Fabric')
+
                     maven_url = f'https://maven.fabricmc.net/net/fabricmc/fabric-installer/{loader_version}/fabric-installer-{loader_version}.jar'
                     installer_path = os.path.join(full_server_path, 'fabric-installer.jar')
                     urllib.request.urlretrieve(maven_url, installer_path)
+
                     # Ejecutar el instalador en modo servidor
                     await ctx.send('✅ Instalador de Fabric descargado. Ejecutando instalador (puede tardar)...')
-                    subprocess.run(['java', '-jar', installer_path, 'server', '-mcversion', version, '-downloadMinecraft', '-dir', full_server_path], check=False)
-                    await ctx.send('✅ Instalación de Fabric (intento) completada. Comprueba la carpeta para server.jar.')
+                    try:
+                        subprocess.run(['java', '-jar', installer_path, 'server', '-mcversion', version, '-downloadMinecraft', '-dir', full_server_path], check=True, timeout=300)
+                        await ctx.send('✅ Instalación de Fabric completada. Comprueba la carpeta para server.jar.')
+                    except subprocess.TimeoutExpired:
+                        await ctx.send('⚠️ El instalador de Fabric excedió el tiempo de ejecución. Revisa la carpeta manualmente.')
+                    except subprocess.CalledProcessError as cpe:
+                        await ctx.send(f'⚠️ El instalador de Fabric devolvió un error ({cpe.returncode}). Revisa la carpeta.')
                 except Exception as e:
                     await ctx.send(f'⚠️ No se pudo instalar Fabric automáticamente: {e}.')
 
