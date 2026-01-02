@@ -6,6 +6,7 @@ import urllib.error
 import shutil
 import time
 import subprocess
+import asyncio
 
 class Installer(commands.Cog):
     """
@@ -385,23 +386,34 @@ class Installer(commands.Cog):
         # 7. Intentar arrancar brevemente el servidor para generar world (si hay server.jar)
         server_jar = os.path.join(full_server_path, 'server.jar')
         if os.path.exists(server_jar):
-            await ctx.send('⚙️ Iniciando el servidor brevemente para generar archivos (`world`)...')
+            await ctx.send('⚙️ Iniciando el servidor brevemente para generar archivos (`world`)... (El bot esperará 60s)')
             try:
-                proc = subprocess.Popen(['java', f'-Xms{ram}', f'-Xmx{ram}', '-jar', 'server.jar', 'nogui'], cwd=full_server_path)
-                # Esperar un tiempo para que genere archivos
-                time.sleep(40)
-                # Intentar detenerlo de forma segura enviando stop vía taskkill (no RCON)
+                # Usamos CREATE_NEW_CONSOLE para que sea un proceso independiente y limpio
+                proc = subprocess.Popen(
+                    ['java', f'-Xms{ram}', f'-Xmx{ram}', '-jar', 'server.jar', 'nogui'],
+                    cwd=full_server_path,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+                
+                # CAMBIO CLAVE: Usamos await asyncio.sleep en vez de time.sleep
+                # Esto permite que el bot siga respondiendo a otros comandos mientras espera
+                await asyncio.sleep(60)
+
+                # Cerrar el proceso forzosamente tras la espera
                 try:
                     proc.kill()
+                    # Aseguramos limpieza profunda con taskkill por si quedaron subprocesos
+                    os.system(f"taskkill /F /T /PID {proc.pid}")
                 except Exception:
                     pass
+                
                 await ctx.send('✅ Proceso de arranque breve completado. Revisa la carpeta si se creó `world`.')
             except Exception as e:
                 await ctx.send(f'⚠️ No se pudo arrancar el servidor automáticamente: {e}')
         else:
             await ctx.send('⚠️ No se encontró `server.jar` en la carpeta; no se puede arrancar automáticamente.')
 
-        await ctx.send('✅ Instalación completada (o creada la estructura). Revisa los pasos manuales si algo falló.')
+        await ctx.send('✅ Instalación completada. Usa `!iniciar` para encenderlo definitivamente.')
 
     @install_server.error
     async def install_error(self, ctx, error):
