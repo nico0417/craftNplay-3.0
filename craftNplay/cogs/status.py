@@ -6,6 +6,10 @@ from discord.ext import commands
 from mcstatus import JavaServer
 from mcrcon import MCRcon
 import socket
+import os
+
+# Role requerido para comandos administrativos
+ADMIN_ROLE = "Admin"
 
 class ServerStatus(commands.Cog):
     """
@@ -42,12 +46,12 @@ class ServerStatus(commands.Cog):
             else:
                 servers_tmp = self.load_server_data()
                 if not servers_tmp:
-                    await ctx.send('❌ No hay servidores registrados en `servers.json`.')
+                    await ctx.send('❌ No hay servidores registrados.')
                     return
                 if len(servers_tmp) == 1:
                     server_name = next(iter(servers_tmp))
                 else:
-                    await ctx.send('❌ Debes especificar el nombre del servidor. Ejemplo: `!estado mi_servidor`')
+                    await ctx.send('❌ Debes especificar el nombre del servidor.')
                     return
 
         await ctx.send(f"🔍 Consultando el estado del servidor `{server_name}`...")
@@ -129,6 +133,65 @@ class ServerStatus(commands.Cog):
             await ctx.send(f'❌ ¡Te falta un argumento! Debes especificar el nombre del servidor. Ejemplo: `!{ctx.command.name} mi_servidor`')
         else:
             await ctx.send(f'Ocurrió un error inesperado: {error}')
+
+    @commands.command(name='rcon_test')
+    async def rcon_test(self, ctx, server_name: str = None):
+        """Prueba rápida de RCON: socket + autenticación.
+
+        `server_name` es opcional y se resuelve usando `default_server` o
+        si solo hay un servidor registrado.
+        """
+        # Resolver server_name igual que en status
+        if not server_name:
+            if self.config and getattr(self.config, 'default_server', None):
+                server_name = getattr(self.config, 'default_server')
+            else:
+                servers_tmp = self.load_server_data()
+                if not servers_tmp:
+                    await ctx.send('❌ No hay servidores registrados en `servers.json`.')
+                    return
+                if len(servers_tmp) == 1:
+                    server_name = next(iter(servers_tmp))
+                else:
+                    await ctx.send('❌ Debes especificar el nombre del servidor. Ejemplo: `!rcon_test mi_servidor`')
+                    return
+
+        servers_data = self.load_server_data()
+        server_info = servers_data.get(server_name)
+        if not server_info:
+            await ctx.send(f'❌ No se encontró `{server_name}` en `servers.json`.')
+            return
+
+        rcon_host = server_info.get('rcon_host', 'localhost')
+        rcon_port = server_info.get('rcon_port', 25575)
+
+        await ctx.send(f'🔎 Probando RCON en `{server_name}` ({rcon_host}:{rcon_port})...')
+
+        # Comprobar socket
+        try:
+            def sock_check():
+                s = socket.create_connection((rcon_host, int(rcon_port)), timeout=3)
+                s.close()
+            await asyncio.wait_for(asyncio.to_thread(sock_check), timeout=4)
+        except Exception as e:
+            await ctx.send(f'❌ No se pudo conectar al socket RCON: {e}')
+            return
+
+        # Comprobar autenticación RCON
+        rcon_pass = os.getenv('RCON_PASSWORD')
+        if not rcon_pass:
+            await ctx.send('⚠️ No hay `RCON_PASSWORD` en las variables de entorno; no se puede probar autenticación.')
+            return
+
+        try:
+            def do_auth():
+                with MCRcon(rcon_host, rcon_pass, port=rcon_port) as mcr:
+                    return mcr.command('list')
+
+            resp = await asyncio.wait_for(asyncio.to_thread(do_auth), timeout=6)
+            await ctx.send('✅ RCON accesible y contraseña válida. Respuesta recibida.')
+        except Exception as e:
+            await ctx.send(f'❌ Error autenticando con RCON: {e}')
 
 async def setup(bot):
     """Función para cargar el Cog en el bot."""
