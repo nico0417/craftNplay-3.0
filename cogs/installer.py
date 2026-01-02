@@ -118,7 +118,6 @@ class Installer(commands.Cog):
             "@echo off\n"
             "title CraftNPlay Server Console\n"
             "java @user_jvm_args.txt -jar server.jar nogui\n"
-            "pause\n"
         )
         
         try:
