@@ -143,18 +143,11 @@ class Installer(commands.Cog):
                     if not loaders:
                         raise RuntimeError('No se encontró un loader de Fabric para esa versión.')
 
-                    # Intentar usar el endpoint directo que puede devolver server.jar
-                    # Ejemplo: /v2/versions/loader/{mc}/{loader}/{installer}/server/jar
-                    chosen = None
-                    if isinstance(loaders, list) and len(loaders) > 0:
-                        chosen = loaders[0]
-
-                    # Determinar loader_version posible y normalizarlo a string
+                    # Intentar múltiples combinaciones de loader/installer para descargar server.jar directamente
                     def _normalize_loader_version(v):
                         if isinstance(v, str):
                             return v
                         if isinstance(v, dict):
-                            # Buscar campos comunes
                             if 'version' in v and isinstance(v['version'], str):
                                 return v['version']
                             if 'maven' in v and isinstance(v['maven'], str):
@@ -163,72 +156,83 @@ class Installer(commands.Cog):
                                     return parts[-1]
                             if 'id' in v and isinstance(v['id'], str):
                                 return v['id']
-                            # último recurso: intentar convertir algún campo a string
                             for key in ('version', 'id', 'name', 'maven'):
                                 if key in v and isinstance(v[key], str):
                                     return v[key]
                             return json.dumps(v)
                         return str(v)
 
-                    loader_version = None
-                    if isinstance(chosen, dict):
-                        loader_version = _normalize_loader_version(chosen.get('loader') or chosen.get('version') or chosen.get('id') or chosen)
-                    else:
-                        loader_version = _normalize_loader_version(chosen)
-
                     downloaded = False
-                    installer_version = None
-
-                    # Intentar obtener lista de installer versions para el loader
-                    try:
-                        loader_detail_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}'
-                        with urllib.request.urlopen(loader_detail_url, timeout=10) as rd:
-                            loader_details = json.load(rd)
-                        # loader_details puede ser una lista de installers
-                        if isinstance(loader_details, list) and len(loader_details) > 0:
-                            first = loader_details[0]
-                            if isinstance(first, dict) and first.get('version'):
-                                installer_version = first.get('version')
-                            elif isinstance(first, str):
-                                installer_version = first
-                    except Exception:
-                        installer_version = None
-
-                    if installer_version:
+                    # loaders puede ser una lista de candidatos; iterar
+                    candidates = loaders if isinstance(loaders, list) else [loaders]
+                    tried = []
+                    for cand in candidates:
+                        loader_version = _normalize_loader_version(cand)
+                        # intentar obtener installers para este loader
                         try:
-                            direct_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{installer_version}/server/jar'
-                            dest_jar = os.path.join(full_server_path, 'server.jar')
-                            urllib.request.urlretrieve(direct_url, dest_jar)
-                            if os.path.exists(dest_jar):
-                                await ctx.send('✅ Fabric server.jar descargado directamente desde meta.fabricmc.net.')
-                                downloaded = True
+                            loader_detail_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}'
+                            with urllib.request.urlopen(loader_detail_url, timeout=10) as rd:
+                                loader_details = json.load(rd)
                         except Exception:
-                            downloaded = False
+                            loader_details = None
+
+                        installer_versions = []
+                        if isinstance(loader_details, list) and loader_details:
+                            for it in loader_details:
+                                if isinstance(it, dict) and it.get('version'):
+                                    installer_versions.append(it.get('version'))
+                                elif isinstance(it, str):
+                                    installer_versions.append(it)
+
+                        # intentar endpoint directo para cada installer_version
+                        for inst_ver in installer_versions:
+                            try:
+                                direct_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{inst_ver}/server/jar'
+                                dest_jar = os.path.join(full_server_path, 'server.jar')
+                                urllib.request.urlretrieve(direct_url, dest_jar)
+                                if os.path.exists(dest_jar):
+                                    await ctx.send(f'✅ Fabric server.jar descargado directamente (loader={loader_version}, installer={inst_ver}).')
+                                    downloaded = True
+                                    break
+                            except Exception:
+                                tried.append((loader_version, inst_ver))
+                        if downloaded:
+                            break
 
                     if not downloaded:
-                        # Fallback: descargar el installer jar desde Maven y ejecutarlo
-                        try:
-                            maven_url = f'https://maven.fabricmc.net/net/fabricmc/fabric-installer/{loader_version}/fabric-installer-{loader_version}.jar'
-                            installer_path = os.path.join(full_server_path, 'fabric-installer.jar')
-                            urllib.request.urlretrieve(maven_url, installer_path)
-                            await ctx.send('✅ Instalador de Fabric descargado (fallback). Ejecutando instalador (puede tardar)...')
-                            proc = subprocess.run([
-                                'java', '-jar', installer_path, 'server', '-mcversion', version, '-downloadMinecraft', '-dir', full_server_path
-                            ], check=False, capture_output=True, text=True, timeout=300)
-                            created = os.path.exists(os.path.join(full_server_path, 'server.jar'))
-                            if created:
-                                await ctx.send('✅ Instalación de Fabric completada. `server.jar` generado correctamente.')
-                            else:
-                                stdout = (proc.stdout or '').strip()[:1000]
-                                stderr = (proc.stderr or '').strip()[:1000]
-                                await ctx.send('⚠️ El instalador de Fabric terminó pero no generó `server.jar`. Salida del instalador (resumen):')
-                                if stdout:
-                                    await ctx.send(f'```STDOUT:\n{stdout}```')
-                                if stderr:
-                                    await ctx.send(f'```STDERR:\n{stderr}```')
-                                await ctx.send('Por favor revisa manualmente la carpeta o ejecuta el instalador localmente para ver errores completos.')
-                        except Exception as e:
-                            await ctx.send(f'⚠️ Fallback de Fabric falló: {e}.')
+                        # Fallback: intentar descargar y ejecutar installer.jar para cada candidate loader
+                        for cand in candidates:
+                            loader_version = _normalize_loader_version(cand)
+                            try:
+                                maven_url = f'https://maven.fabricmc.net/net/fabricmc/fabric-installer/{loader_version}/fabric-installer-{loader_version}.jar'
+                                installer_path = os.path.join(full_server_path, f'fabric-installer-{loader_version}.jar')
+                                try:
+                                    urllib.request.urlretrieve(maven_url, installer_path)
+                                except Exception as e:
+                                    # no disponible, seguir al siguiente candidato
+                                    continue
+                                await ctx.send(f'✅ Instalador de Fabric descargado (loader={loader_version}). Ejecutando instalador (puede tardar)...')
+                                proc = subprocess.run([
+                                    'java', '-jar', installer_path, 'server', '-mcversion', version, '-downloadMinecraft', '-dir', full_server_path
+                                ], check=False, capture_output=True, text=True, timeout=300)
+                                created = os.path.exists(os.path.join(full_server_path, 'server.jar'))
+                                if created:
+                                    await ctx.send(f'✅ Instalación de Fabric completada (loader={loader_version}). `server.jar` generado correctamente.')
+                                    downloaded = True
+                                    break
+                                else:
+                                    stdout = (proc.stdout or '').strip()[:1000]
+                                    stderr = (proc.stderr or '').strip()[:1000]
+                                    await ctx.send('⚠️ El instalador de Fabric terminó pero no generó `server.jar`. Salida del instalador (resumen):')
+                                    if stdout:
+                                        await ctx.send(f'```STDOUT:\n{stdout}```')
+                                    if stderr:
+                                        await ctx.send(f'```STDERR:\n{stderr}```')
+                            except Exception as e:
+                                # continuar probando otros loaders
+                                continue
+                    if not downloaded:
+                        await ctx.send('⚠️ No se pudo obtener `server.jar` automáticamente para Fabric con los loaders disponibles. Revisa los logs.')
                 except Exception as e:
                     await ctx.send(f'⚠️ No se pudo instalar Fabric automáticamente: {e}.')
 
