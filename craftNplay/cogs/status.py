@@ -189,9 +189,9 @@ class ServerStatus(commands.Cog):
                         rport = props.get('rcon.port')
 
                         summary = (
-                            f'`server.properties` encontrado en `{prop_path}`. Resumen:\n'
+                            'Resumen de `server.properties` (solo estados):\n'
                             f'- enable-rcon: {enable or "(no encontrado)"}\n'
-                            f'- rcon.password: {"(set)" if rpass else "(no establecido)"}\n'
+                            f'- rcon.password: {"(set)" if rpass else "(no establecido)"}\n+'
                             f'- rcon.port: {rport or "(no encontrado)"}'
                         )
                         await ctx.send(summary)
