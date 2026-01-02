@@ -167,23 +167,53 @@ class ServerStatus(commands.Cog):
 
         await ctx.send(f'🔎 Probando RCON en `{server_name}` ({rcon_host}:{rcon_port})...')
 
-        # Comprobar socket
+        # Comprobar socket y autenticación RCON; si falla, intentar leer server.properties
+        async def report_props_and_hint(err):
+            await ctx.send(f'❌ Prueba RCON fallida: {err}')
+            server_path = server_info.get('path')
+            if server_path and os.path.isdir(server_path):
+                prop_path = os.path.join(server_path, 'server.properties')
+                if os.path.exists(prop_path):
+                    try:
+                        props = {}
+                        with open(prop_path, 'r', encoding='utf-8') as pf:
+                            for line in pf:
+                                line = line.strip()
+                                if not line or line.startswith('#') or '=' not in line:
+                                    continue
+                                k, v = line.split('=', 1)
+                                props[k.strip()] = v.strip()
+
+                        enable = props.get('enable-rcon')
+                        rpass = props.get('rcon.password')
+                        rport = props.get('rcon.port')
+
+                        summary = (
+                            f'`server.properties` encontrado en `{prop_path}`. Resumen:\n'
+                            f'- enable-rcon: {enable or "(no encontrado)"}\n'
+                            f'- rcon.password: {"(set)" if rpass else "(no establecido)"}\n'
+                            f'- rcon.port: {rport or "(no encontrado)"}'
+                        )
+                        await ctx.send(summary)
+                    except Exception as e2:
+                        await ctx.send(f'⚠️ Error leyendo `server.properties`: {e2}')
+                else:
+                    await ctx.send('⚠️ No se encontró `server.properties` en la carpeta del servidor.')
+            else:
+                await ctx.send('⚠️ No se pudo localizar la carpeta del servidor para leer `server.properties`.')
+
         try:
             def sock_check():
                 s = socket.create_connection((rcon_host, int(rcon_port)), timeout=3)
                 s.close()
             await asyncio.wait_for(asyncio.to_thread(sock_check), timeout=4)
-        except Exception as e:
-            await ctx.send(f'❌ No se pudo conectar al socket RCON: {e}')
-            return
 
-        # Comprobar autenticación RCON
-        rcon_pass = os.getenv('RCON_PASSWORD')
-        if not rcon_pass:
-            await ctx.send('⚠️ No hay `RCON_PASSWORD` en las variables de entorno; no se puede probar autenticación.')
-            return
+            # Comprobar autenticación RCON
+            rcon_pass = os.getenv('RCON_PASSWORD')
+            if not rcon_pass:
+                await ctx.send('⚠️ No hay `RCON_PASSWORD` en las variables de entorno; no se puede probar autenticación.')
+                return
 
-        try:
             def do_auth():
                 with MCRcon(rcon_host, rcon_pass, port=rcon_port) as mcr:
                     return mcr.command('list')
@@ -191,7 +221,7 @@ class ServerStatus(commands.Cog):
             resp = await asyncio.wait_for(asyncio.to_thread(do_auth), timeout=6)
             await ctx.send('✅ RCON accesible y contraseña válida. Respuesta recibida.')
         except Exception as e:
-            await ctx.send(f'❌ Error autenticando con RCON: {e}')
+            await report_props_and_hint(e)
 
 async def setup(bot):
     """Función para cargar el Cog en el bot."""
