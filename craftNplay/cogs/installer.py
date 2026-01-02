@@ -1,6 +1,11 @@
 import os
 import json
 from discord.ext import commands
+import urllib.request
+import urllib.error
+import shutil
+import time
+import subprocess
 
 class Installer(commands.Cog):
     """
@@ -10,19 +15,27 @@ class Installer(commands.Cog):
         self.bot = bot
         # Usar el manager central que está en el bot
         self.config = bot.config_manager 
+        # Ruta por defecto donde crear servidores si no se indica
+        self.default_parent = os.environ.get('CNP_DEFAULT_SERVERS_PATH', r'C:/Documents/servers')
 
     @commands.command(name='install')
     @commands.is_owner()
-    async def install_server(self, ctx, server_type: str, version: str, base_name: str, *, parent_path: str):
+    async def install_server(self, ctx, server_type: str, version: str, base_name: str, parent_path: str = None):
         """
         Crea la estructura de carpetas, EULA y config. de RAM para un nuevo servidor.
         Uso: !install <tipo> <version> <nombre> <ruta_padre>
         Ejemplo: !install neoforge 1.21.1 mi_servidor D:\\ServidoresMC
         """
-        # 1. Validar que la ruta padre exista
+        # 1. Determinar y validar la ruta padre
+        if not parent_path:
+            parent_path = self.default_parent
+
         if not os.path.isdir(parent_path):
-            await ctx.send(f'❌ La ruta padre `{parent_path}` no existe o no es un directorio.')
-            return
+            try:
+                os.makedirs(parent_path, exist_ok=True)
+            except OSError as e:
+                await ctx.send(f'❌ La ruta padre `{parent_path}` no existe y no se pudo crear: {e}')
+                return
 
         # 2. Crear la ruta completa y la carpeta del servidor
         folder_name = f"{base_name}_{version}_{server_type}"
@@ -50,12 +63,18 @@ class Installer(commands.Cog):
             return # Detener si esto falla
 
         # 4. Crear el archivo de argumentos de RAM (para Fabric/NeoForge/Forge)
+        # Estimación de RAM por tipo
+        if server_type.lower() == 'vanilla':
+            ram = '4G'
+        else:
+            ram = '6G'
+
         jvm_args_content = (
             "# Configuración de JVM generada por CraftNPlay\n"
             "# -Xms: RAM inicial asignada\n"
             "# -Xmx: RAM máxima asignada\n"
-            "-Xms6G\n"
-            "-Xmx6G\n"
+            f"-Xms{ram}\n"
+            f"-Xmx{ram}\n"
         )
         try:
             jvm_args_path = os.path.join(full_server_path, 'user_jvm_args.txt')
@@ -75,14 +94,84 @@ class Installer(commands.Cog):
             script="run.bat", # Asumimos que el instalador creará "run.bat"
             rcon_port=25575 # Puerto RCON por defecto
         )
-        
         await ctx.send(f'💾 ¡Servidor `{base_name}` registrado! Ahora puedes usar `!iniciar {base_name}`.')
-        
-        # 6. Actualizar el mensaje de "Próximos pasos"
-        await ctx.send(f'**Próximos pasos (manuales):**\n'
-                       f'1. Descarga el instalador de `{server_type}` (versión `{version}`).\n'
-                       f'2. **MUÉVELO** a la nueva carpeta (`{full_server_path}`).\n'
-                       f'3. **EJECÚTALO** allí para que instale los archivos del servidor. Esto creará el `run.bat` automáticamente.')
+
+        # 6. Intentar descargar e instalar automáticamente según tipo
+        await ctx.send('⬇️ Intentando descargar e instalar automáticamente los archivos del servidor...')
+
+        try:
+            if server_type.lower() == 'vanilla':
+                # Descargar server.jar oficial de Mojang usando launchermeta
+                await ctx.send('🔎 Descargando server.jar oficial (Mojang) para la versión solicitada...')
+                try:
+                    manifest_url = 'https://launchermeta.mojang.com/mc/game/version_manifest.json'
+                    with urllib.request.urlopen(manifest_url, timeout=10) as mf:
+                        manifest = json.load(mf)
+
+                    vinfo = next((v for v in manifest.get('versions', []) if v.get('id') == version), None)
+                    if not vinfo:
+                        raise RuntimeError('Versión no encontrada en el manifest oficial de Mojang')
+
+                    with urllib.request.urlopen(vinfo.get('url'), timeout=10) as vf:
+                        vjson = json.load(vf)
+
+                    server_download = vjson.get('downloads', {}).get('server', {})
+                    server_url = server_download.get('url')
+                    if not server_url:
+                        raise RuntimeError('No se encontró server.jar para esa versión (descarga no disponible)')
+
+                    dest_jar = os.path.join(full_server_path, 'server.jar')
+                    urllib.request.urlretrieve(server_url, dest_jar)
+                    await ctx.send('✅ server.jar (Vanilla) descargado correctamente.')
+                except Exception as e:
+                    await ctx.send(f'⚠️ No se pudo descargar el server.jar oficial automáticamente: {e}. Deberás mover manualmente el `server.jar` a la carpeta del servidor.')
+
+            elif server_type.lower() == 'fabric':
+                # Intentar descargar el instalador de Fabric y ejecutarlo
+                await ctx.send('🔎 Descargando instalador de Fabric (si está disponible)...')
+                try:
+                    loaders_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}'
+                    with urllib.request.urlopen(loaders_url, timeout=10) as r:
+                        loaders = json.load(r)
+                    if not loaders:
+                        raise RuntimeError('No se encontró un loader de Fabric para esa versión.')
+                    loader_version = loaders[0].get('version')
+                    maven_url = f'https://maven.fabricmc.net/net/fabricmc/fabric-installer/{loader_version}/fabric-installer-{loader_version}.jar'
+                    installer_path = os.path.join(full_server_path, 'fabric-installer.jar')
+                    urllib.request.urlretrieve(maven_url, installer_path)
+                    # Ejecutar el instalador en modo servidor
+                    await ctx.send('✅ Instalador de Fabric descargado. Ejecutando instalador (puede tardar)...')
+                    subprocess.run(['java', '-jar', installer_path, 'server', '-mcversion', version, '-downloadMinecraft', '-dir', full_server_path], check=False)
+                    await ctx.send('✅ Instalación de Fabric (intento) completada. Comprueba la carpeta para server.jar.')
+                except Exception as e:
+                    await ctx.send(f'⚠️ No se pudo instalar Fabric automáticamente: {e}.')
+
+            else:
+                await ctx.send('⚠️ Tipo solicitado no soportado para descarga automática (por ahora). Se creó la estructura; copia el `server.jar` manualmente.')
+
+        except Exception as e:
+            await ctx.send(f'⚠️ Error durante la instalación automática: {e}')
+
+        # 7. Intentar arrancar brevemente el servidor para generar world (si hay server.jar)
+        server_jar = os.path.join(full_server_path, 'server.jar')
+        if os.path.exists(server_jar):
+            await ctx.send('⚙️ Iniciando el servidor brevemente para generar archivos (`world`)...')
+            try:
+                proc = subprocess.Popen(['java', f'-Xms{ram}', f'-Xmx{ram}', '-jar', 'server.jar', 'nogui'], cwd=full_server_path)
+                # Esperar un tiempo para que genere archivos
+                time.sleep(40)
+                # Intentar detenerlo de forma segura enviando stop vía taskkill (no RCON)
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                await ctx.send('✅ Proceso de arranque breve completado. Revisa la carpeta si se creó `world`.')
+            except Exception as e:
+                await ctx.send(f'⚠️ No se pudo arrancar el servidor automáticamente: {e}')
+        else:
+            await ctx.send('⚠️ No se encontró `server.jar` en la carpeta; no se puede arrancar automáticamente.')
+
+        await ctx.send('✅ Instalación completada (o creada la estructura). Revisa los pasos manuales si algo falló.')
 
     @install_server.error
     async def install_error(self, ctx, error):
