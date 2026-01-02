@@ -57,8 +57,8 @@ CraftNPlay es un bot de Discord escrito en Python para la gestión remota de ser
 
 Uso básico:
 
- - `!install vanilla 1.21.1 nombre_server`  → descarga Paper para 1.21.1 y configura el servidor.
- - `!install fabric 1.19.2 nombre_server`   → descarga el instalador de Fabric y lo ejecuta para preparar el servidor.
+ - `!install vanilla 1.21.1 nombre_server`  → descarga Vanilla para 1.21.1 y configura el servidor.
+ - `!install fabric 1.19.2 nombre_server`   → descarga Fabric y configura el servidor.
 
 Qué hace:
 
@@ -72,6 +72,15 @@ Notas de seguridad:
 
  - El bot nunca expone rutas completas del sistema en mensajes públicos; solo muestra estados y recomendaciones.
  - Para RCON, configura `rcon.password` en `server.properties` y establece `RCON_PASSWORD` en las variables de entorno del sistema.
+
+## ✅ Recomendaciones y buenas prácticas
+
+- Seguridad RCON: usa una contraseña fuerte y no la compartas. Evita exponer el puerto RCON públicamente; usa firewall y redes internas cuando sea posible.
+- Backups: realiza copias periódicas de la carpeta `world` y de `server.properties` antes de ejecutar instalaciones automáticas.
+- Java: instala una versión de Java compatible con la versión de Minecraft objetivo (Java 17+ para 1.18+ en la mayoría de casos). Verifica `java -version` en el host.
+- Entorno del bot: configura variables de entorno seguras (por ejemplo con un servicio de systemd, Windows Task Scheduler o contenedor) en vez de ponerlas en texto plano.
+- Logs: revisa el archivo `bot_errors.log` en la raíz del proyecto para trazas completas de errores; el bot envía mensajes concisos en Discord.
+- Actualizaciones: guarda una copia de `servers.json` antes de grandes cambios; la carga automática hace backup en `servers.json.corrupt` si el fichero está corrupto.
 
 
 ---

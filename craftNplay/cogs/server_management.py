@@ -5,6 +5,7 @@ import asyncio
 import subprocess
 from mcrcon import MCRcon
 import socket
+from ..utils.errors import log_exception
 
 # --- CONFIGURACIÓN ---
 ADMIN_ROLE = "Admin" 
@@ -79,14 +80,17 @@ class ServerManagement(commands.Cog):
         try:
             if self.playit_process is None or self.playit_process.poll() is not None:
                 if not os.path.exists(PLAYIT_PATH):
-                    await ctx.send(f"❌ Error: No se encontró el ejecutable de Playit.gg en la ruta `{PLAYIT_PATH}`.")
+                    # Don't leak local paths in public messages; provide actionable hint
+                    await ctx.send('❌ Error: No se encontró el ejecutable de Playit.gg en la ruta configurada. Revisa la configuración del bot.')
+                    log_exception(FileNotFoundError(PLAYIT_PATH), context='Playit executable missing')
                     return False
                 await ctx.send("Iniciando el túnel de Playit.gg...")
                 self.playit_process = subprocess.Popen(PLAYIT_PATH)
                 await asyncio.sleep(5) # Dar tiempo para que se conecte
                 await ctx.send("✅ Túnel de Playit.gg iniciado.")
         except Exception as e:
-            await ctx.send(f"❌ Error al iniciar Playit.gg: {e}")
+            log_exception(e, context='Error starting Playit process')
+            await ctx.send('❌ Error al iniciar Playit.gg. Revisa los logs del bot.')
             return False
         # --- FIN DE LÓGICA PLAYIT ---
 
@@ -110,7 +114,8 @@ class ServerManagement(commands.Cog):
             await ctx.send(f'El servidor `{server_name}` se ha iniciado. Dale unos minutos para que esté en línea.')
             return True
         except Exception as e:
-            await ctx.send(f'❌ Ocurrió un error al iniciar `{server_name}`: {e}')
+            log_exception(e, context=f'Error starting server {server_name}')
+            await ctx.send(f'❌ Ocurrió un error al iniciar `{server_name}`. Revisa los logs del bot.')
             return False
 
     async def _internal_stop_server(self, ctx, server_name: str, stop_playit: bool):
@@ -135,8 +140,9 @@ class ServerManagement(commands.Cog):
                     with socket.create_connection((rcon_host, int(rcon_port)), timeout=3):
                         pass
                 except Exception as sock_e:
-                    await ctx.send(f'⚠️ No se pudo conectar al RCON {rcon_host}:{rcon_port} (socket): {sock_e}. Se forzará cierre.')
-                    raise
+                        await ctx.send('⚠️ No se pudo conectar al RCON (socket). Se forzará cierre.')
+                        log_exception(sock_e, context=f'RCON socket error for {server_name} at {rcon_host}:{rcon_port}')
+                        raise
 
                 def do_rcon_stop():
                     with MCRcon(rcon_host, self.rcon_password, port=rcon_port) as mcr:
@@ -151,7 +157,8 @@ class ServerManagement(commands.Cog):
                 except asyncio.TimeoutError:
                     await ctx.send('⚠️ Timeout al enviar comando RCON. Forzando cierre.')
                 except Exception as rcon_e:
-                    await ctx.send(f'⚠️ Error al usar RCON: {rcon_e}. Forzando cierre.')
+                    log_exception(rcon_e, context=f'RCON command error for {server_name}')
+                    await ctx.send('⚠️ Error al usar RCON. Forzando cierre.')
             except Exception:
                 # Si cualquier comprobación falla, continuamos con el forzado
                 pass
@@ -162,7 +169,8 @@ class ServerManagement(commands.Cog):
                 os.system(f"taskkill /F /T /PID {process.pid}")
                 await ctx.send(f'✅ El servidor `{server_name}` ha sido forzado a detenerse.')
             except Exception as e:
-                await ctx.send(f'❌ Error al forzar el cierre: {e}')
+                    log_exception(e, context=f'Error forcing kill for {server_name}')
+                    await ctx.send('❌ Error al forzar el cierre del servidor. Revisa los logs del bot.')
                 return False
 
         del self.running_servers[server_name]
@@ -288,7 +296,8 @@ class ServerManagement(commands.Cog):
         elif isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(f"❌ ¡Te falta un argumento! Debes especificar el nombre del servidor. Ejemplo: `!{ctx.command.name} mi_servidor`")
         else:
-            await ctx.send(f"Ocurrió un error inesperado en el comando: {error}")
+            log_exception(error, context=f'Unhandled error in server_management command: {ctx.command.name if hasattr(ctx, "command") else "?"}')
+            await ctx.send('❌ Ocurrió un error inesperado. Se ha registrado en el log del bot.')
 
 async def setup(bot):
     await bot.add_cog(ServerManagement(bot))
