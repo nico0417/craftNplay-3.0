@@ -83,6 +83,31 @@ class Installer(commands.Cog):
             await ctx.send('✅ `user_jvm_args.txt` creado con 6GB de RAM por defecto.')
         except Exception as e:
             await ctx.send(f'❌ Error al crear `user_jvm_args.txt`: {e}')
+        # 4.5 Crear server.properties con RCON ACTIVADO automáticamente
+        # Esto evita que tengas que editarlo a mano después de instalar.
+        rcon_pass = os.getenv('RCON_PASSWORD', 'password_seguro_por_defecto')
+        
+        properties_content = (
+            "# Archivo generado por CraftNPlay\n"
+            "enable-rcon=true\n"
+            "rcon.port=25575\n"
+            f"rcon.password={rcon_pass}\n"
+            "server-port=25565\n"
+            f"motd=Servidor {base_name} - CraftNPlay\n"
+            "difficulty=normal\n"
+        )
+        
+        try:
+            prop_path = os.path.join(full_server_path, 'server.properties')
+            # Solo lo creamos si no existe para no sobrescribir configs de un server existente
+            if not os.path.exists(prop_path):
+                with open(prop_path, 'w') as f:
+                    f.write(properties_content)
+                await ctx.send('✅ `server.properties` creado con **RCON habilitado**.')
+            else:
+                await ctx.send('ℹ️ `server.properties` ya existía, no se modificó (asegúrate de activar RCON manual).')
+        except Exception as e:
+            await ctx.send(f'⚠️ No se pudo crear server.properties: {e}')
         
         # 5. Registrar el nuevo servidor usando el método del config manager
         if base_name in self.config.servers:
