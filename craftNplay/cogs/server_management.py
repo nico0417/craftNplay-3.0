@@ -192,7 +192,6 @@ class ServerManagement(commands.Cog):
         if started and self.config and getattr(self.config, 'set_default_server', None):
             try:
                 self.config.set_default_server(server_name)
-                await ctx.send(f'✅ `{server_name}` establecido como servidor por defecto.')
             except Exception:
                 # No bloquear si falla el guardado
                 pass
