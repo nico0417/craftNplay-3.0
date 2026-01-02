@@ -43,14 +43,16 @@ class Installer(commands.Cog):
         full_server_path = os.path.join(parent_path, folder_name)
 
         if os.path.exists(full_server_path):
-            await ctx.send(f'⚠️ La carpeta `{full_server_path}` ya existe. No se ha realizado ninguna acción.')
+            # CAMBIO: Solo mostramos folder_name
+            await ctx.send(f'⚠️ La carpeta `{folder_name}` ya existe. No se ha realizado ninguna acción.')
             return
 
         try:
             os.makedirs(full_server_path)
-            await ctx.send(f'✅ Carpeta del servidor creada en: `{full_server_path}`')
+            # CAMBIO: Mensaje más corto y seguro
+            await ctx.send(f'✅ Carpeta del servidor creada: `{folder_name}`')
         except OSError as e:
-            await ctx.send(f'❌ Error al crear la carpeta del servidor: {e}')
+            await ctx.send(f'❌ Error al crear la carpeta: {e}')
             return
 
         # 3. Crear y aceptar el EULA automáticamente
@@ -109,6 +111,23 @@ class Installer(commands.Cog):
                 await ctx.send('ℹ️ `server.properties` ya existía, no se modificó (asegúrate de activar RCON manual).')
         except Exception as e:
             await ctx.send(f'⚠️ No se pudo crear server.properties: {e}')
+
+        # 4.6 Crear el script de inicio (run.bat)
+        # Usamos los argumentos definidos en user_jvm_args.txt para mantenerlo limpio
+        run_bat_content = (
+            "@echo off\n"
+            "title CraftNPlay Server Console\n"
+            "java @user_jvm_args.txt -jar server.jar nogui\n"
+            "pause\n"
+        )
+        
+        try:
+            bat_path = os.path.join(full_server_path, 'run.bat')
+            with open(bat_path, 'w') as f:
+                f.write(run_bat_content)
+            await ctx.send('✅ `run.bat` creado correctamente.')
+        except Exception as e:
+            await ctx.send(f'⚠️ Error al crear `run.bat`: {e}')
         
         # 5. Registrar el nuevo servidor usando el método del config manager
         if base_name in self.config.servers:
@@ -424,7 +443,7 @@ class Installer(commands.Cog):
             await ctx.send('⚠️ No se encontró `server.jar` en la carpeta; no se puede arrancar automáticamente.')
 
         await ctx.send('✅ Instalación completada. Usa `!iniciar` para encenderlo definitivamente.')
-        
+
     @install_server.error
     async def install_error(self, ctx, error):
         """Manejo de errores para el comando de instalación."""

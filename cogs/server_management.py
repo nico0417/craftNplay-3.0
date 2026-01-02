@@ -5,7 +5,7 @@ import asyncio
 import subprocess
 from mcrcon import MCRcon
 import socket
-from ..utils.errors import log_exception
+from utils.errors import log_exception
 
 # --- CONFIGURACIÓN ---
 ADMIN_ROLE = "Admin" 

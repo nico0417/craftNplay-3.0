@@ -7,7 +7,7 @@ from mcstatus import JavaServer
 from mcrcon import MCRcon
 import socket
 import os
-from ..utils.errors import log_exception
+from utils.errors import log_exception
 
 # Role requerido para comandos administrativos
 ADMIN_ROLE = "Admin"

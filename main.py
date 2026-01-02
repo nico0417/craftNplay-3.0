@@ -6,62 +6,90 @@ from dotenv import load_dotenv
 from utils.config import Config
 
 class CraftNPlayBot(commands.Bot):
-    """
-    Clase principal del bot que hereda de commands.Bot.
-    """
     def __init__(self):
-        # Definir los intents necesarios para el bot
+        # Intents necesarios
         intents = discord.Intents.default()
         intents.message_content = True
-        intents.members = True # Opcional, pero útil para algunos comandos
+        intents.members = True 
 
         super().__init__(command_prefix='!', intents=intents)
 
-        # Instancia única del manejador de configuración / servers
         self.config_manager = Config()
+        self.failed_cogs = [] # Lista de módulos caídos
 
     async def setup_hook(self):
-        """
-        Hook que se ejecuta al iniciar el bot para cargar las extensiones (Cogs).
-        """
-        print("Cargando módulos (Cogs)...")
-        # Itera sobre todos los archivos en el directorio 'cogs'
-        for filename in os.listdir('./cogs'):
-            # Carga el archivo si es un script de Python
-            if filename.endswith('.py') and not filename.startswith('__'):
-                try:
-                    await self.load_extension(f'cogs.{filename[:-3]}')
-                    print(f'  -> Módulo {filename} cargado.')
-                except Exception as e:
-                    print(f'❌ Error al cargar el módulo {filename}: {e}')
+        """Carga módulos y registra fallos silenciosamente."""
+        print("--- Cargando módulos ---")
         
-        print("Todos los módulos han sido procesados.")
+        if not os.path.exists('./cogs'):
+            print("❌ Error: No existe la carpeta 'cogs'.")
+            return
+
+        for filename in os.listdir('./cogs'):
+            if filename.endswith('.py') and not filename.startswith('__'):
+                cog_name = f'cogs.{filename[:-3]}'
+                try:
+                    await self.load_extension(cog_name)
+                    print(f'  ✅ {filename} cargado.')
+                except Exception as e:
+                    # Registramos el error pero no matamos el bot
+                    error_msg = str(e)
+                    print(f'  ❌ ERROR EN {filename}: {error_msg}')
+                    self.failed_cogs.append((filename, error_msg))
 
     async def on_ready(self):
-        """
-        Evento que se dispara cuando el bot está conectado y listo.
-        """
-        print('---')
-        print(f'✅ Bot conectado como: {self.user} (ID: {self.user.id})')
-        print('---')
+        """Reporte de estado al iniciar."""
+        print('\n' + '='*40)
+        print(f'🤖 Bot conectado: {self.user}')
+        
+        if self.failed_cogs:
+            # 1. REPORTE DETALLADO EN CLI (Solo para ti en la consola)
+            print(f"⚠️  ADVERTENCIA: {len(self.failed_cogs)} MÓDULOS FALLARON")
+            print('='*40)
+            for module, err in self.failed_cogs:
+                print(f" - [FALLO] {module}: {err}")
+            print('='*40 + '\n')
+
+            # 2. SEÑAL VISUAL EN DISCORD (Estado Rojo)
+            await self.change_presence(
+                status=discord.Status.dnd, 
+                activity=discord.Game(name="⚠️ Error de Sistema")
+            )
+
+            # 3. MENSAJE PÚBLICO SIMPLE (En los servidores)
+            # Intenta avisar en el canal por defecto de cada servidor
+            msg = "⚠️ **Alerta:** El bot se ha iniciado con errores internos. Algunas funciones no estarán disponibles."
+            for guild in self.guilds:
+                try:
+                    # Intenta usar el canal de sistema (bienvenida) o el primer canal de texto disponible
+                    channel = guild.system_channel or next((c for c in guild.text_channels if c.permissions_for(guild.me).send_messages), None)
+                    if channel:
+                        await channel.send(msg)
+                except Exception:
+                    pass # Si no tiene permisos, no insistimos.
+
+        else:
+            print("✅ Todo funcionando correctamente.")
+            print('='*40 + '\n')
+            # Estado normal
+            await self.change_presence(activity=discord.Game(name="Minecraft Manager"))
 
 async def main():
-    """
-    Función principal para configurar y ejecutar el bot.
-    """
-    # Cargar variables de entorno desde el archivo .env
     load_dotenv()
-    
     token = os.getenv('DISCORD_BOT_TOKEN')
+    
     if not token:
-        print("❌ Error: El token del bot (DISCORD_BOT_TOKEN) no se encontró en las variables de entorno.")
+        print("❌ Error: Falta el token en .env")
         return
 
     bot = CraftNPlayBot()
-    await bot.start(token)
+    try:
+        await bot.start(token)
+    except KeyboardInterrupt:
+        await bot.close()
 
 if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Bot desconectado por el usuario.")
+        pass
