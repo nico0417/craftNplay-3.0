@@ -4,6 +4,7 @@ import json
 import asyncio
 import subprocess
 from mcrcon import MCRcon
+import socket
 
 # --- CONFIGURACIÓN ---
 ADMIN_ROLE = "Admin" 
@@ -102,14 +103,31 @@ class ServerManagement(commands.Cog):
         if self.rcon_password:
             await ctx.send(f'⛔ Intentando un cierre seguro de `{server_name}` vía RCON...')
             try:
-                with MCRcon(rcon_host, self.rcon_password, port=rcon_port) as mcr:
-                    mcr.command("stop")
-                await ctx.send('Comando "stop" enviado. Esperando 30 segundos...')
-                await asyncio.to_thread(process.wait, timeout=30)
-                stopped_safely = True
-                await ctx.send(f'✅ El servidor `{server_name}` se ha detenido de forma segura.')
-            except Exception as e:
-                await ctx.send(f'⚠️ No se pudo usar RCON ({e}). Forzando el cierre.')
+                # Comprobar que el puerto está accesible antes de usar MCRcon
+                try:
+                    with socket.create_connection((rcon_host, int(rcon_port)), timeout=3):
+                        pass
+                except Exception as sock_e:
+                    await ctx.send(f'⚠️ No se pudo conectar al RCON {rcon_host}:{rcon_port} (socket): {sock_e}. Se forzará cierre.')
+                    raise
+
+                def do_rcon_stop():
+                    with MCRcon(rcon_host, self.rcon_password, port=rcon_port) as mcr:
+                        mcr.command("stop")
+
+                try:
+                    await asyncio.wait_for(asyncio.to_thread(do_rcon_stop), timeout=5)
+                    await ctx.send('Comando "stop" enviado. Esperando 30 segundos...')
+                    await asyncio.to_thread(process.wait, timeout=30)
+                    stopped_safely = True
+                    await ctx.send(f'✅ El servidor `{server_name}` se ha detenido de forma segura.')
+                except asyncio.TimeoutError:
+                    await ctx.send('⚠️ Timeout al enviar comando RCON. Forzando cierre.')
+                except Exception as rcon_e:
+                    await ctx.send(f'⚠️ Error al usar RCON: {rcon_e}. Forzando cierre.')
+            except Exception:
+                # Si cualquier comprobación falla, continuamos con el forzado
+                pass
         
         if not stopped_safely:
             await ctx.send(f'Forzando el cierre del proceso PID: `{process.pid}`...')

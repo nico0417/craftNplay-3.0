@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 from mcstatus import JavaServer
 from mcrcon import MCRcon
+import socket
 
 class ServerStatus(commands.Cog):
     """
@@ -59,6 +60,13 @@ class ServerStatus(commands.Cog):
             if status.players.online > 0 and self.rcon_password:
                 try:
                     def get_player_list():
+                        # Comprobar socket primero para detectar fallos de conexión rápidos
+                        try:
+                            with socket.create_connection((rcon_host, int(rcon_port)), timeout=3):
+                                pass
+                        except Exception as sock_e:
+                            raise RuntimeError(f"Socket error: {sock_e}")
+
                         with MCRcon(rcon_host, self.rcon_password, port=rcon_port) as mcr:
                             resp = mcr.command("/list")
                             # Lógica mejorada para parsear la respuesta de /list
@@ -69,7 +77,10 @@ class ServerStatus(commands.Cog):
                                     return "\n".join(player_names)
                             return None
 
-                    player_list = await asyncio.to_thread(get_player_list)
+                    try:
+                        player_list = await asyncio.wait_for(asyncio.to_thread(get_player_list), timeout=5)
+                    except Exception as rcon_e:
+                        raise rcon_e
 
                     if player_list:
                         embed.add_field(name=f"Jugadores Conectados ({status.players.online})", value=f"```{player_list}```", inline=False)
