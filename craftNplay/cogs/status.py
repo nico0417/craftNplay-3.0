@@ -7,6 +7,7 @@ from mcstatus import JavaServer
 from mcrcon import MCRcon
 import socket
 import os
+from ..utils.errors import log_exception
 
 # Role requerido para comandos administrativos
 ADMIN_ROLE = "Admin"
@@ -113,17 +114,19 @@ class ServerStatus(commands.Cog):
 
                 except Exception as rcon_e:
                     embed.add_field(name="Jugadores Conectados", value="No se pudo obtener la lista (error de RCON).", inline=False)
-                    embed.set_footer(text=f"Error RCON: {rcon_e}")
+                    # Log full traceback, don't expose internal errors to channel
+                    log_exception(rcon_e, context=f'RCON error while fetching players for {server_name}')
 
             await ctx.send(embed=embed)
 
         except Exception as e:
+            # Log details and show a concise message
+            log_exception(e, context=f'Error checking status for {server_name}')
             embed = discord.Embed(
                 title=f"❌ Servidor `{server_name}` Fuera de Línea",
-                description="No se pudo conectar con el servidor. Puede que esté apagado o iniciándose.",
+                description="No se pudo conectar con el servidor. Puede que esté apagado o iniciándose. Revisa los logs del bot para más información.",
                 color=discord.Color.red()
             )
-            embed.set_footer(text=f"Error: {e}")
             await ctx.send(embed=embed)
 
     @status_command.error
@@ -132,7 +135,8 @@ class ServerStatus(commands.Cog):
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(f'❌ ¡Te falta un argumento! Debes especificar el nombre del servidor. Ejemplo: `!{ctx.command.name} mi_servidor`')
         else:
-            await ctx.send(f'Ocurrió un error inesperado: {error}')
+            log_exception(error, context=f'Unhandled error in status command: {ctx.message.content if hasattr(ctx,' 'message') else ctx.command.name}')
+            await ctx.send('❌ Ocurrió un error inesperado. Se ha registrado en el log.')
 
     @commands.command(name='rcon_test')
     async def rcon_test(self, ctx, server_name: str = None):
