@@ -388,24 +388,34 @@ class Installer(commands.Cog):
         if os.path.exists(server_jar):
             await ctx.send('⚙️ Iniciando el servidor brevemente para generar archivos (`world`)... (El bot esperará 60s)')
             try:
-                # Usamos CREATE_NEW_CONSOLE para que sea un proceso independiente y limpio
+                # Usamos CREATE_NEW_CONSOLE para que sea un proceso independiente
                 proc = subprocess.Popen(
                     ['java', f'-Xms{ram}', f'-Xmx{ram}', '-jar', 'server.jar', 'nogui'],
                     cwd=full_server_path,
                     creationflags=subprocess.CREATE_NEW_CONSOLE
                 )
                 
-                # CAMBIO CLAVE: Usamos await asyncio.sleep en vez de time.sleep
-                # Esto permite que el bot siga respondiendo a otros comandos mientras espera
-                await asyncio.sleep(60)
+                # Esperamos de forma asíncrona (el bot sigue vivo para otros comandos)
+                await asyncio.sleep(60) 
 
-                # Cerrar el proceso forzosamente tras la espera
-                try:
+                # CIERRE ROBUSTO Y SILENCIOSO
+                # 1. Intentamos matar el objeto proceso de Python
+                if proc.poll() is None: # Solo si sigue corriendo
                     proc.kill()
-                    # Aseguramos limpieza profunda con taskkill por si quedaron subprocesos
-                    os.system(f"taskkill /F /T /PID {proc.pid}")
-                except Exception:
-                    pass
+                    try:
+                        proc.wait(timeout=5) # Esperar a que muera para evitar zombies
+                    except subprocess.TimeoutExpired:
+                        pass
+
+                # 2. Aseguramos limpieza con taskkill (Solo si sigue vivo)
+                # Usamos subprocess.run en vez de os.system para redirigir la salida a la basura
+                # y evitar mensajes de error rojos en tu consola.
+                if proc.poll() is None:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                        stdout=subprocess.DEVNULL, # Silenciar éxito
+                        stderr=subprocess.DEVNULL  # Silenciar error "no running instance"
+                    )
                 
                 await ctx.send('✅ Proceso de arranque breve completado. Revisa la carpeta si se creó `world`.')
             except Exception as e:
@@ -414,7 +424,7 @@ class Installer(commands.Cog):
             await ctx.send('⚠️ No se encontró `server.jar` en la carpeta; no se puede arrancar automáticamente.')
 
         await ctx.send('✅ Instalación completada. Usa `!iniciar` para encenderlo definitivamente.')
-
+        
     @install_server.error
     async def install_error(self, ctx, error):
         """Manejo de errores para el comando de instalación."""

@@ -171,7 +171,7 @@ class ServerManagement(commands.Cog):
             except Exception as e:
                     log_exception(e, context=f'Error forcing kill for {server_name}')
                     await ctx.send('❌ Error al forzar el cierre del servidor. Revisa los logs del bot.')
-                return False
+                    return False
 
         del self.running_servers[server_name]
 

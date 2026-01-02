@@ -135,9 +135,11 @@ class ServerStatus(commands.Cog):
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(f'❌ ¡Te falta un argumento! Debes especificar el nombre del servidor. Ejemplo: `!{ctx.command.name} mi_servidor`')
         else:
-            log_exception(error, context=f'Unhandled error in status command: {ctx.message.content if hasattr(ctx,' 'message') else ctx.command.name}')
+            # CORRECCIÓN AQUÍ: Se arregló el hasattr y las comillas
+            content = ctx.message.content if hasattr(ctx, 'message') else ctx.command.name
+            log_exception(error, context=f'Unhandled error in status command: {content}')
             await ctx.send('❌ Ocurrió un error inesperado. Se ha registrado en el log.')
-
+    
     @commands.command(name='rcon_test')
     async def rcon_test(self, ctx, server_name: str = None):
         """Prueba rápida de RCON: socket + autenticación.
