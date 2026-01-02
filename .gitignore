@@ -1,0 +1,18 @@
+# Archivos de caché de Python
+__pycache__/
+*.pyc
+
+# Entornos virtuales
+venv/
+env/
+*.venv
+
+# Archivos de configuración con secretos
+# (Aunque usamos variables de entorno, es una buena práctica)
+.env
+servers.json
+*servers.json
+
+# Registros y bases de datos
+*.log
+*.db
