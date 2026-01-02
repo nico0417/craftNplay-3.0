@@ -143,6 +143,16 @@ class Installer(commands.Cog):
                     if not loaders:
                         raise RuntimeError('No se encontró un loader de Fabric para esa versión.')
 
+                    # Comprobar que `java` esté disponible antes de ejecutar instaladores
+                    try:
+                        java_check = subprocess.run(['java', '-version'], capture_output=True, text=True, timeout=5)
+                        if java_check.returncode != 0:
+                            await ctx.send('⚠️ `java` no parece estar disponible o devuelve error. Instalación de Fabric necesita Java para ejecutar el instalador. Instala Java y vuelve a intentarlo.')
+                            return
+                    except Exception:
+                        await ctx.send('⚠️ `java` no se encontró en el sistema. Instalación de Fabric requiere Java. Por favor instala Java en el host antes de usar esta función.')
+                        return
+
                     # Intentar múltiples combinaciones de loader/installer para descargar server.jar directamente
                     def _normalize_loader_version(v):
                         if isinstance(v, str):
@@ -168,6 +178,14 @@ class Installer(commands.Cog):
                     tried = []
                     for cand in candidates:
                         loader_version = _normalize_loader_version(cand)
+                        # Intentar combos conocidos primero (ej: loader 0.18.4 -> installer 1.1.0)
+                        known_map = {
+                            '0.18.4': ['1.1.0', '1.0.0'],
+                            '0.17.1': ['1.0.0'],
+                        }
+                        installer_versions = []
+                        if loader_version in known_map:
+                            installer_versions.extend(known_map[loader_version])
                         # intentar obtener installers para este loader
                         try:
                             loader_detail_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}'
