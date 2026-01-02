@@ -143,21 +143,59 @@ class Installer(commands.Cog):
                     if not loaders:
                         raise RuntimeError('No se encontró un loader de Fabric para esa versión.')
 
+                    # Helper de debug: registrar en archivo y enviar resumen a canal (recortado)
+                    debug_log_path = os.path.join(full_server_path, 'install_debug.log')
+                    def log_debug(msg):
+                        ts = time.strftime('%Y-%m-%d %H:%M:%S')
+                        entry = f'[{ts}] {msg}\n'
+                        try:
+                            with open(debug_log_path, 'a', encoding='utf-8') as df:
+                                df.write(entry)
+                        except Exception:
+                            pass
+
+                    async def send_debug_line(line):
+                        try:
+                            # Evitar mensajes excesivamente largos
+                            if len(line) > 1900:
+                                line = line[:1900] + '... (truncated)'
+                            await ctx.send(f'`[install-debug]` {line}')
+                        except Exception:
+                            pass
+
+                    log_debug(f'Starting Fabric install debug for mc_version={version}.')
+
                     # Comprobar que `java` esté disponible antes de ejecutar instaladores
                     try:
                         java_check = subprocess.run(['java', '-version'], capture_output=True, text=True, timeout=5)
                         if java_check.returncode != 0:
                             await ctx.send('⚠️ `java` no parece estar disponible o devuelve error. Instalación de Fabric necesita Java para ejecutar el instalador. Instala Java y vuelve a intentarlo.')
+                            log_debug('Java check failed: non-zero returncode')
                             return
                     except Exception:
                         await ctx.send('⚠️ `java` no se encontró en el sistema. Instalación de Fabric requiere Java. Por favor instala Java en el host antes de usar esta función.')
+                        log_debug('Java not found in PATH')
                         return
 
-                    # Intentar múltiples combinaciones de loader/installer para descargar server.jar directamente
+                    # Normalizador de versiones
                     def _normalize_loader_version(v):
+                        # Handle common shapes returned by Fabric meta endpoints.
                         if isinstance(v, str):
                             return v
                         if isinstance(v, dict):
+                            # Prefer nested 'loader' object -> 'version'
+                            loader_obj = v.get('loader')
+                            if isinstance(loader_obj, dict):
+                                ver = loader_obj.get('version')
+                                if isinstance(ver, str):
+                                    return ver
+                                maven = loader_obj.get('maven')
+                                if isinstance(maven, str):
+                                    parts = maven.split(':')
+                                    if parts:
+                                        return parts[-1]
+
+                            # Older/alternate shapes: top-level 'version' or 'maven' keys
                             if 'version' in v and isinstance(v['version'], str):
                                 return v['version']
                             if 'maven' in v and isinstance(v['maven'], str):
@@ -166,33 +204,76 @@ class Installer(commands.Cog):
                                     return parts[-1]
                             if 'id' in v and isinstance(v['id'], str):
                                 return v['id']
-                            for key in ('version', 'id', 'name', 'maven'):
-                                if key in v and isinstance(v[key], str):
-                                    return v[key]
-                            return json.dumps(v)
+                            # As a last resort, try 'name'
+                            if 'name' in v and isinstance(v['name'], str):
+                                return v['name']
+                            # If still unknown, return a compact string to avoid embedding full JSON
+                            try:
+                                return json.dumps(v, separators=(',', ':'), ensure_ascii=False)
+                            except Exception:
+                                return str(v)
                         return str(v)
 
+                    # Priorizar combos conocidos (Option A)
+                    priority_combos = {
+                        # mc_version: list of (loader_version, installer_version) tuples
+                        '1.21.11': [('0.18.4', '1.1.0')],
+                    }
+
+                    # Función de descarga con comprobación previa (HEAD-like) y traza
+                    def try_download_stream(url, dest_path):
+                        log_debug(f'Trying download URL: {url}')
+                        req = urllib.request.Request(url, headers={'User-Agent': 'CraftNPlay/Installer'})
+                        try:
+                            with urllib.request.urlopen(req, timeout=15) as resp:
+                                code = getattr(resp, 'status', None) or getattr(resp, 'getcode', lambda: None)()
+                                headers = resp.headers if hasattr(resp, 'headers') else {}
+                                content_length = headers.get('Content-Length') or headers.get('content-length')
+                                log_debug(f'HTTP {code} for {url}; Content-Length={content_length}')
+                                if code and int(code) == 200:
+                                    # Stream to file
+                                    with open(dest_path, 'wb') as out_f:
+                                        shutil.copyfileobj(resp, out_f)
+                                    size = os.path.getsize(dest_path)
+                                    log_debug(f'Downloaded {size} bytes to {dest_path}')
+                                    return True, code, content_length
+                                else:
+                                    return False, code, content_length
+                        except urllib.error.HTTPError as he:
+                            log_debug(f'HTTPError {he.code} for {url}: {he}')
+                            return False, getattr(he, 'code', None), None
+                        except Exception as e:
+                            log_debug(f'Error downloading {url}: {e}')
+                            return False, None, None
+
                     downloaded = False
-                    # loaders puede ser una lista de candidatos; iterar
                     candidates = loaders if isinstance(loaders, list) else [loaders]
-                    tried = []
+
+                    # Build a map of loader_version -> installer_versions for candidates that actually match the requested mc version
+                    loader_map = {}
                     for cand in candidates:
                         loader_version = _normalize_loader_version(cand)
-                        # Intentar combos conocidos primero (ej: loader 0.18.4 -> installer 1.1.0)
-                        known_map = {
-                            '0.18.4': ['1.1.0', '1.0.0'],
-                            '0.17.1': ['1.0.0'],
-                        }
-                        installer_versions = []
-                        if loader_version in known_map:
-                            installer_versions.extend(known_map[loader_version])
-                        # intentar obtener installers para este loader
-                        try:
-                            loader_detail_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}'
-                            with urllib.request.urlopen(loader_detail_url, timeout=10) as rd:
-                                loader_details = json.load(rd)
-                        except Exception:
-                            loader_details = None
+                        loader_details = None
+                        # Try mc-specific endpoint first; if it fails (400), try loader-only endpoint
+                        urls_to_try = [
+                            f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}',
+                            f'https://meta.fabricmc.net/v2/versions/loader/{loader_version}',
+                        ]
+                        for loader_detail_url in urls_to_try:
+                            try:
+                                log_debug(f'Fetching loader details from {loader_detail_url}')
+                                req = urllib.request.Request(loader_detail_url, headers={'User-Agent': 'CraftNPlay/Installer'})
+                                with urllib.request.urlopen(req, timeout=10) as rd:
+                                    loader_details = json.load(rd)
+                                    log_debug(f'Fetched loader details from {loader_detail_url} (len={len(str(loader_details))})')
+                                    break
+                            except urllib.error.HTTPError as he:
+                                log_debug(f'HTTPError {he.code} for {loader_detail_url}: {he}')
+                                # If 400, continue to next url; otherwise also continue but log
+                                continue
+                            except Exception as e:
+                                log_debug(f'Could not fetch loader details for {loader_version} from {loader_detail_url}: {e}')
+                                continue
 
                         installer_versions = []
                         if isinstance(loader_details, list) and loader_details:
@@ -201,56 +282,72 @@ class Installer(commands.Cog):
                                     installer_versions.append(it.get('version'))
                                 elif isinstance(it, str):
                                     installer_versions.append(it)
+                        if installer_versions:
+                            loader_map[loader_version] = installer_versions
+                            log_debug(f'Loader {loader_version} has installers: {installer_versions}')
 
-                        # intentar endpoint directo para cada installer_version
-                        for inst_ver in installer_versions:
-                            try:
+                    # First, try explicit priority combos if the mc version matches
+                    if version in priority_combos:
+                        for loader_v, inst_v in priority_combos[version]:
+                            direct_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_v}/{inst_v}/server/jar'
+                            dest_jar = os.path.join(full_server_path, 'server.jar')
+                            ok, code, clen = try_download_stream(direct_url, dest_jar)
+                            await send_debug_line(f'Tried priority URL {direct_url} -> HTTP {code} Content-Length={clen}')
+                            if ok and os.path.exists(dest_jar):
+                                await ctx.send(f'✅ Fabric server.jar descargado desde URL prioritaria (loader={loader_v}, installer={inst_v}).')
+                                downloaded = True
+                                break
+
+                    # If we have loader_map entries, try direct endpoints for those loaders only
+                    if not downloaded and loader_map:
+                        for loader_version, installer_versions in loader_map.items():
+                            for inst_ver in installer_versions:
                                 direct_url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{inst_ver}/server/jar'
                                 dest_jar = os.path.join(full_server_path, 'server.jar')
-                                urllib.request.urlretrieve(direct_url, dest_jar)
-                                if os.path.exists(dest_jar):
+                                ok, code, clen = try_download_stream(direct_url, dest_jar)
+                                await send_debug_line(f'Tried {direct_url} -> HTTP {code} Content-Length={clen}')
+                                if ok and os.path.exists(dest_jar):
                                     await ctx.send(f'✅ Fabric server.jar descargado directamente (loader={loader_version}, installer={inst_ver}).')
                                     downloaded = True
                                     break
-                            except Exception:
-                                tried.append((loader_version, inst_ver))
-                        if downloaded:
-                            break
+                            if downloaded:
+                                break
 
-                    if not downloaded:
-                        # Fallback: intentar descargar y ejecutar installer.jar para cada candidate loader
-                        for cand in candidates:
-                            loader_version = _normalize_loader_version(cand)
+                    # Fallback: only try installer JARs for loaders that matched (loader_map)
+                    if not downloaded and loader_map:
+                        for loader_version in loader_map.keys():
                             try:
                                 maven_url = f'https://maven.fabricmc.net/net/fabricmc/fabric-installer/{loader_version}/fabric-installer-{loader_version}.jar'
                                 installer_path = os.path.join(full_server_path, f'fabric-installer-{loader_version}.jar')
-                                try:
-                                    urllib.request.urlretrieve(maven_url, installer_path)
-                                except Exception as e:
-                                    # no disponible, seguir al siguiente candidato
+                                ok, code, clen = try_download_stream(maven_url, installer_path)
+                                await send_debug_line(f'Tried maven {maven_url} -> HTTP {code} Content-Length={clen}')
+                                if not ok or not os.path.exists(installer_path):
+                                    log_debug(f'Installer JAR not available at {maven_url} (loader={loader_version})')
                                     continue
                                 await ctx.send(f'✅ Instalador de Fabric descargado (loader={loader_version}). Ejecutando instalador (puede tardar)...')
                                 proc = subprocess.run([
                                     'java', '-jar', installer_path, 'server', '-mcversion', version, '-downloadMinecraft', '-dir', full_server_path
                                 ], check=False, capture_output=True, text=True, timeout=300)
                                 created = os.path.exists(os.path.join(full_server_path, 'server.jar'))
+                                stdout = (proc.stdout or '').strip()[:4000]
+                                stderr = (proc.stderr or '').strip()[:4000]
+                                log_debug(f'Installer stdout: {stdout[:1000]}')
+                                log_debug(f'Installer stderr: {stderr[:1000]}')
                                 if created:
                                     await ctx.send(f'✅ Instalación de Fabric completada (loader={loader_version}). `server.jar` generado correctamente.')
                                     downloaded = True
                                     break
                                 else:
-                                    stdout = (proc.stdout or '').strip()[:1000]
-                                    stderr = (proc.stderr or '').strip()[:1000]
-                                    await ctx.send('⚠️ El instalador de Fabric terminó pero no generó `server.jar`. Salida del instalador (resumen):')
+                                    await ctx.send('⚠️ El instalador de Fabric terminó pero no generó `server.jar`. Resumen de salida:')
                                     if stdout:
                                         await ctx.send(f'```STDOUT:\n{stdout}```')
                                     if stderr:
                                         await ctx.send(f'```STDERR:\n{stderr}```')
                             except Exception as e:
-                                # continuar probando otros loaders
+                                log_debug(f'Error running installer for loader={loader_version}: {e}')
                                 continue
                     if not downloaded:
-                        await ctx.send('⚠️ No se pudo obtener `server.jar` automáticamente para Fabric con los loaders disponibles. Revisa los logs.')
+                        await ctx.send('⚠️ No se pudo obtener `server.jar` automáticamente para Fabric con los loaders disponibles. Revisa `install_debug.log` en la carpeta del servidor.')
                 except Exception as e:
                     await ctx.send(f'⚠️ No se pudo instalar Fabric automáticamente: {e}.')
 

@@ -226,6 +226,60 @@ class ServerManagement(commands.Cog):
         if await self._internal_stop_server(ctx, resolved, stop_playit=False):
             await asyncio.sleep(5)  # Esperar un momento
             await self._internal_start_server(ctx, resolved)
+
+    @commands.command(name='list')
+    async def list_command(self, ctx):
+        """Lista los servidores registrados (nombre, versión y tipo). No muestra rutas completas."""
+        servers = self.load_server_data()
+        if not servers:
+            await ctx.send('❌ No hay servidores registrados.')
+            return
+
+        rows = []
+        for name, info in servers.items():
+            version = info.get('version')
+            stype = info.get('type')
+            path = info.get('path', '')
+
+            # Infer version and type from folder name if not present
+            if not version or not stype:
+                base = os.path.basename(path) if path else ''
+                parts = base.split('_') if base else []
+                ver = None
+                for p in parts:
+                    if p and any(c.isdigit() for c in p) and p.count('.') >= 1:
+                        ver = p
+                        break
+                if not version:
+                    version = ver or 'unknown'
+                known_types = {'fabric', 'vanilla', 'forge', 'neoforge'}
+                t = None
+                for p in reversed(parts):
+                    lp = p.lower()
+                    if lp in known_types:
+                        t = lp
+                        break
+                if not stype:
+                    stype = t or (parts[-1].lower() if parts else 'unknown')
+
+            rows.append((name, version, stype))
+
+        # Compute column widths (cap name width)
+        name_width = max(len(r[0]) for r in rows + [('Name', '', '')])
+        name_width = min(name_width, 30)
+        ver_width = max(len(r[1]) for r in rows + [('', 'Version', '')])
+        ver_width = min(ver_width, 15)
+        type_width = max(len(r[2]) for r in rows + [('', '', 'Type')])
+        type_width = min(type_width, 15)
+
+        header = f"{'Name'.ljust(name_width)} | {'Version'.ljust(ver_width)} | {'Type'.ljust(type_width)}"
+        sep = '-' * (len(header))
+        out_lines = [header, sep]
+        for name, version, stype in rows:
+            n = (name[:name_width-3] + '...') if len(name) > name_width else name
+            out_lines.append(f"{n.ljust(name_width)} | {version.ljust(ver_width)} | {stype.ljust(type_width)}")
+
+        await ctx.send('```\n' + '\n'.join(out_lines) + '\n```')
     
     # Manejador de errores para este Cog
     async def cog_command_error(self, ctx, error):
